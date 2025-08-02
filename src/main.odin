@@ -1,5 +1,6 @@
 package mob
 
+import "core:math/noise"
 import la "core:math/linalg"
 import m "core:math"
 import r "vendor:raylib"
@@ -31,18 +32,74 @@ SCREEN_SIZE :: [2]f32{320, 180}
 
 Sprite :: enum {
     Null,
+
 	  Cursor,
-	  Barrier,
-    Floor,
+    GeneralFloor,
+
+    FloorSandstone0,
+    FloorSandstone1,
+    FloorSandstone2,
+    FloorSandstone3,
+    FloorSandstone4,
+
+    FloorGrass0,
+    FloorGrass1,
+    FloorGrass2,
+    FloorGrass3,
+    FloorGrass4,
+    FloorGrass5,
+    FloorGrass6,
+    FloorGrass7,
+
     Wall,
+    BrightWall,
+}
+
+spriteYOffset := [Sprite]f32 {
+        .Null = 0,
+	      .Cursor = 0,
+        .GeneralFloor = 0,
+        .FloorSandstone0 = 0,
+        .FloorSandstone1 = 0,
+        .FloorSandstone2 = 0,
+        .FloorSandstone3 = 0,
+        .FloorSandstone4 = 0,
+        .FloorGrass0 = 0,
+        .FloorGrass1 = 0,
+        .FloorGrass2 = 0,
+        .FloorGrass3 = 0,
+        .FloorGrass4 = 0,
+        .FloorGrass5 = 0,
+        .FloorGrass6 = 0,
+        .FloorGrass7 = 0,
+        .Wall = -8,
+        .BrightWall = -8,
 }
 
 spriteMap := [Sprite]SpriteRect {
         .Null = {},
+
+        .GeneralFloor = {},
+
 	      .Cursor = {0, 0, 7, 7},
-	      .Barrier = {40, 0, 16, 16},
-        .Floor = {8, 0, 16, 16},
-        .Wall = {24, 0, 16, 16},
+
+        .FloorSandstone0 = {16, 16*0, 16, 16},
+        .FloorSandstone1 = {16, 16*1, 16, 16},
+        .FloorSandstone2 = {16, 16*2, 16, 16},
+        .FloorSandstone3 = {16, 16*3, 16, 16},
+        .FloorSandstone4 = {16, 16*4, 16, 16},
+
+        .FloorGrass0 = {32, 16*0, 16, 16},
+        .FloorGrass1 = {32, 16*1, 16, 16},
+        .FloorGrass2 = {32, 16*2, 16, 16},
+        .FloorGrass3 = {32, 16*3, 16, 16},
+        .FloorGrass4 = {32, 16*4, 16, 16},
+        .FloorGrass5 = {32, 16*5, 16, 16},
+        .FloorGrass6 = {32, 16*6, 16, 16},
+        .FloorGrass7 = {32, 16*7, 16, 16},
+
+        .Wall = {64, 16-8, 16, 16+8},
+        .BrightWall = {80, 16-8, 16, 16+8},
 }
 
 Tile :: Sprite
@@ -114,7 +171,7 @@ walkDrunk :: proc (center: [2]int, maxIters: int = 32, lifetimeRange: [2]int = {
 
     walkerPool := [MAX_WALKERS]Walker{}
 
-    gameMap[center.y][center.x] = .Floor
+    gameMap[center.y][center.x] = .GeneralFloor
 
     spawnWalker(center, &walkerPool, false, .Left, lifetimeRange)
     spawnWalker(center, &walkerPool, false, .Right, lifetimeRange)
@@ -163,7 +220,7 @@ walkDrunk :: proc (center: [2]int, maxIters: int = 32, lifetimeRange: [2]int = {
 
             curTile := &gameMap[w.pos.y][w.pos.x]
 
-            curTile^ = .Floor
+            curTile^ = .GeneralFloor
 
             if w.lifetime <= 0 || rnd.float32() < DEATH_CHANCE {
                 w.active = false
@@ -197,10 +254,10 @@ generateMap :: proc() {
                          int(m.round(m.sin(a)*INNER_RADIUS+.5))}
         for x in 0..=offset.x {
             for y in 0..=offset.y {
-                gameMap[center.y+y][center.x+x] = .Floor
-                gameMap[center.y-y][center.x-x] = .Floor
-                gameMap[center.y-y][center.x+x] = .Floor
-                gameMap[center.y+y][center.x-x] = .Floor
+                gameMap[center.y+y][center.x+x] = .GeneralFloor
+                gameMap[center.y-y][center.x-x] = .GeneralFloor
+                gameMap[center.y-y][center.x+x] = .GeneralFloor
+                gameMap[center.y+y][center.x-x] = .GeneralFloor
             }
         }
     }
@@ -211,7 +268,74 @@ generateMap :: proc() {
         walkDrunk(offset+center, 16, {8, 12})
     }
 
-    gameMap[center.y][center.x] = .Floor
+    seedTerrain: i64 = rnd.int63()
+    seedVariants: i64 = rnd.int63()
+
+    grassVariants :: []Tile {
+        .FloorGrass1,
+        .FloorGrass2,
+        .FloorGrass3,
+        .FloorGrass4,
+        .FloorGrass5,
+        .FloorGrass6,
+        .FloorGrass7,
+    }
+
+    sandstoneVarians :: []Tile {
+        .FloorSandstone1,
+        .FloorSandstone2,
+        .FloorSandstone3,
+        .FloorSandstone4,
+    }
+
+    ma, mi: f32 = 0, 0
+
+    for y in 0..<len(gameMap) {
+        for x in 0..<len(gameMap[y]) {
+            if gameMap[y][x] != .GeneralFloor do continue
+            p := [2]f64{f64(x), f64(y)}
+
+            v1 := noise.noise_2d(seedTerrain, p*.025)
+            v2 := noise.noise_2d(seedVariants, p)
+
+            ma = max(ma, v2)
+            mi = min(mi, v2)
+            if v1 < 0 {
+                gameMap[y][x] = .FloorGrass0
+                if v2 < -.65 do gameMap[y][x] = rnd.choice(grassVariants)
+            } else {
+                gameMap[y][x] = .FloorSandstone0
+                if v2 < -.65 do gameMap[y][x] = rnd.choice(sandstoneVarians)
+            }
+        }
+    }
+
+    isFloor :: proc (s: Sprite) -> bool {
+        return int(s) >= int(Sprite.FloorSandstone0) && int(s) <= int(Sprite.FloorGrass7)
+    }
+
+    for y in 1..<(len(gameMap)-1) {
+        for x in 1..<(len(gameMap[y])-1) {
+            if !isFloor(gameMap[y][x]) do continue
+
+            for xi in -1..=1 {
+                for yi in -1..=1 {
+                    if isFloor(gameMap[y+yi][x+xi]) do continue
+                    gameMap[y+yi][x+xi] = .Wall
+                }
+            }
+        }
+    }
+
+    for y in 0..<(len(gameMap)-1) {
+        for x in 0..<(len(gameMap[y])-1) {
+            if gameMap[y][x] == .Wall && gameMap[y+1][x] == .Wall{
+                gameMap[y][x] = .BrightWall
+            }
+        }
+    }
+
+    player.pos = ({f32(center.x), f32(center.y)-f32(RADIUS)}+.5)*TILE_SIZE
 }
 
 initGraphics :: proc() {
@@ -243,7 +367,6 @@ initGraphics :: proc() {
 
 init :: proc() {
 	  generateMap()
-	  player.pos = ({MAP_SIZE, MAP_SIZE}*.5+.5)*TILE_SIZE
 
 	  initGraphics()
 }
@@ -299,16 +422,27 @@ drawSprite :: proc(sprite: Sprite,
 	  r.DrawTexturePro(
 		    spriteTex,
 		    rect,
-		    {pos.x, pos.y, rect.width, rect.height},
+		    {pos.x, pos.y+spriteYOffset[sprite], rect.width, rect.height},
 		    origin,
 		    rotation,
 		    tint,
 	  )
 }
 
-drawMap :: proc() {
-	  for yi in 0 ..< len(gameMap) {
-		    for xi in 0 ..< len(gameMap[yi]) {
+MapDrawingOption :: enum {BeforePlayer, AfterPlayer}
+
+drawMap :: proc(how: MapDrawingOption) {
+    startY, endY : int = 0, 0
+
+    playerY: int = int((player.pos.y+8) / TILE_SIZE.y)
+
+    switch how {
+    case .BeforePlayer: startY, endY = 0, playerY+1
+    case .AfterPlayer: startY, endY = playerY+1, len(gameMap)
+    }
+
+	  for yi in startY..<endY {
+		    for xi in 0..< len(gameMap[yi]) {
             drawSprite(gameMap[yi][xi], {f32(xi), f32(yi)} * TILE_SIZE, originPoint = .TopLeft)
 		    }
 	  }
@@ -317,8 +451,8 @@ drawMap :: proc() {
 update :: proc() {
     s := getScreenSize()
 
-	  /* if s.y < s.x do camera.zoom = s.y / SCREEN_SIZE.y */
-	  /* else         do camera.zoom = s.x / SCREEN_SIZE.x */
+	  if s.y < s.x do camera.zoom = s.y / SCREEN_SIZE.y
+	  else         do camera.zoom = s.x / SCREEN_SIZE.x
 
 	  updateMouse()
 	  updateCamera()
@@ -328,7 +462,7 @@ update :: proc() {
 		    r.ClearBackground(r.BLACK)
 
 		    r.BeginMode2D(camera); {
-			      drawMap()
+			      drawMap(.BeforePlayer)
 
 			      r.DrawRectanglePro(
 				        {player.pos.x, player.pos.y, 16, 16},
@@ -336,6 +470,8 @@ update :: proc() {
 				        0,
 				        r.RED,
 			      )
+
+            drawMap(.AfterPlayer)
 
 		        drawSprite(.Cursor, worldMouse+1, cursorTilt*10, r.BLACK)
 		        drawSprite(.Cursor, worldMouse, cursorTilt*10)
