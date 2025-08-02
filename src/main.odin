@@ -1,6 +1,5 @@
 package mob
 
-import "core:math/noise"
 import la "core:math/linalg"
 import m "core:math"
 import r "vendor:raylib"
@@ -8,6 +7,8 @@ import rnd "core:math/rand"
 
 import "core:c"
 import "core:fmt"
+import "core:math/noise"
+import "core:math/ease"
 
 GameStateMainMenu :: struct {}
 GameStatePlaying :: struct {}
@@ -22,8 +23,24 @@ camera := r.Camera2D{}
 
 SpriteRect :: r.Rectangle
 
+PLAYER_SPRITE_WIDTH  :: 10
+PLAYER_SPRITE_HEIGHT :: 16
+
+PLAYER_MAX_SPEED :: 1.7
+PLAYER_IDLE_TIME :: 1
+
+PLAYER_RUNNING_ANIM_TIMER : f32 : .06
+PLAYER_IDLE_ANIM_TIMER    : f32 : .01
+
 Player :: struct {
 	  pos: r.Vector2,
+    speed: f32,
+    posDelta: r.Vector2,
+
+    idleTime: f32,
+    animFrame: int,
+    runTime: f32,
+    playerAnimTimer: f32,
 }
 
 player := Player{}
@@ -382,7 +399,6 @@ setWindowSize :: proc(w, h: c.int) {
 	  r.SetWindowSize(w, h)
 }
 
-PLAYER_SPEED :: 1.5
 updatePlayer :: proc() {
 	  dir := r.Vector2{}
 
@@ -391,7 +407,30 @@ updatePlayer :: proc() {
 	  if r.IsKeyDown(.S) do dir.x -= 1
 	  if r.IsKeyDown(.F) do dir.x += 1
 
-	  player.pos += la.normalize0(dir) * PLAYER_SPEED
+    dir = la.normalize0(dir)
+    if la.length(dir) > 0 {
+        player.idleTime = 0
+
+        if player.speed == 0 {
+            player.animFrame = 0
+            player.playerAnimTimer = PLAYER_RUNNING_ANIM_TIMER
+        }
+
+        player.speed = clamp(0, PLAYER_MAX_SPEED, player.speed+r.GetFrameTime()*25)
+    } else {
+        player.speed = 0
+        player.runTime = 0
+
+        if player.idleTime == 0 {
+            player.playerAnimTimer = PLAYER_IDLE_ANIM_TIMER
+            player.animFrame = 0
+        }
+
+        player.idleTime += r.GetFrameTime()
+    }
+
+    player.posDelta = dir * player.speed
+	  player.pos += player.posDelta
 }
 
 getScreenSize :: proc () -> r.Vector2 {
@@ -448,6 +487,77 @@ drawMap :: proc(how: MapDrawingOption) {
 	  }
 }
 
+PLAYER_MAX_ANIM_SPRITES :: 6
+
+playerIdleSprites := [PLAYER_MAX_ANIM_SPRITES]r.Rectangle {
+    { 0, 240, 10, 16},
+    {10, 240, 10, 16},
+    {20, 240, 10, 16},
+    {30, 240, 10, 16},
+    {40, 240, 10, 16},
+    {50, 240, 10, 16},
+}
+
+playerRunningSprites := [PLAYER_MAX_ANIM_SPRITES]r.Rectangle {
+    { 0, 223, 10, 17},
+    {10, 223, 10, 17},
+    {20, 223, 10, 17},
+    {30, 223, 10, 17},
+    {40, 223, 10, 17},
+    {50, 223, 10, 17},
+}
+
+wrapNumb :: proc (n, limit: int) -> int {
+    if n < 0 {
+        return (limit)-abs(n)
+    } else {
+        return n%limit
+    }
+}
+
+drawPlayer :: proc () {
+    playerIdleOrigin :: [2]f32{5, 8}
+    playerRunningOrigin :: [2]f32{5, 9}
+
+    pSprite := playerIdleSprites[0]
+    o := playerIdleOrigin
+    timer := PLAYER_IDLE_ANIM_TIMER
+
+    if player.idleTime >= PLAYER_IDLE_TIME {
+        pSprite = playerIdleSprites[player.animFrame]
+        o = playerIdleOrigin
+        timer = PLAYER_IDLE_ANIM_TIMER
+    } else if player.speed > 0 {
+        pSprite = playerRunningSprites[player.animFrame]
+        o = playerRunningOrigin
+        timer = PLAYER_RUNNING_ANIM_TIMER
+    }
+
+    m := f32(1.0)
+    if worldMouse.x < player.pos.x do m = -1.0
+
+    pSprite.width *= m
+    r.DrawTexturePro(spriteTex,
+                     pSprite,
+                     {player.pos.x, player.pos.y, pSprite.width, pSprite.height},
+                     o,
+                     0,
+                     r.WHITE)
+
+    frameD := int(1)
+    p := (player.posDelta.x/abs(player.posDelta.x))
+    if p != m {
+        frameD = -1
+    }
+
+    if player.playerAnimTimer <= 0 {
+        player.animFrame = wrapNumb(player.animFrame+frameD, PLAYER_MAX_ANIM_SPRITES)
+        player.playerAnimTimer = timer
+    } else {
+        player.playerAnimTimer -= r.GetFrameTime()
+    }
+}
+
 update :: proc() {
     s := getScreenSize()
 
@@ -463,14 +573,7 @@ update :: proc() {
 
 		    r.BeginMode2D(camera); {
 			      drawMap(.BeforePlayer)
-
-			      r.DrawRectanglePro(
-				        {player.pos.x, player.pos.y, 16, 16},
-				        {8, 8},
-				        0,
-				        r.RED,
-			      )
-
+            drawPlayer()
             drawMap(.AfterPlayer)
 
 		        drawSprite(.Cursor, worldMouse+1, cursorTilt*10, r.BLACK)
