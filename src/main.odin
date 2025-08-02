@@ -29,52 +29,28 @@ player := Player{}
 
 SCREEN_SIZE :: [2]f32{320, 180}
 
-Biome :: enum {
-	  GreenZone,
-	  StoneHills,
-	  BadLands,
-	  Arena,
-}
-
 Sprite :: enum {
     Null,
 	  Cursor,
 	  Barrier,
-	  FloorGreenZone,
-	  FloorStoneHills,
-	  FloorBadLands,
-	  FloorArena,
-	  WallGreenZone,
-	  WallStoneHills,
-	  WallBadLands,
-	  WallArena,
+    Floor,
+    Wall,
 }
 
 spriteMap := [Sprite]SpriteRect {
-        .Null            = {},
-
-	      .Cursor          = {0, 0, 7, 7},
-
-	      .Barrier         = {40, 0, 16, 16},
-
-	      .FloorGreenZone  = {8, 0, 16, 16},
-	      .FloorStoneHills = {8, 0, 16, 16},
-	      .FloorBadLands   = {8, 0, 16, 16},
-	      .FloorArena      = {8, 0, 16, 16},
-
-	      .WallGreenZone   = {24, 0, 16, 16},
-	      .WallStoneHills  = {24, 0, 16, 16},
-	      .WallBadLands    = {24, 0, 16, 16},
-	      .WallArena       = {24, 0, 16, 16},
+        .Null = {},
+	      .Cursor = {0, 0, 7, 7},
+	      .Barrier = {40, 0, 16, 16},
+        .Floor = {8, 0, 16, 16},
+        .Wall = {24, 0, 16, 16},
 }
 
 Tile :: Sprite
 
 TILE_SIZE :: r.Vector2{16, 16}
-BIOME_WIDTH :: 64
-BIOME_HEIGHT :: 64
+MAP_SIZE :: 256
 
-gameMap := [BIOME_HEIGHT * len(Biome)][BIOME_WIDTH]Tile{}
+gameMap := [MAP_SIZE][MAP_SIZE]Tile{}
 
 spriteData := #load("../assets/spritemap.png")
 spriteTex: r.Texture2D
@@ -112,144 +88,130 @@ Walker :: struct {
     active: bool,
     pos: [2]int,
     direction: Direction,
+    lifetime: int
 }
 
-MAX_WALKERS :: 64
+MAX_WALKERS :: 32
 
-generateBiome :: proc (floor, wall: Tile,
-                       c: [2]int,
-                       room2x2Chance, room3x3Chance, corridorChance: f32,
-                       changeDirChance: f32,
-                       spawnWalkerChance: f32,
-                       corridorLength: i32,
-                       maxIterations: i32 = 64) {
-    walkerPool := [MAX_WALKERS]Walker{}
-
-    spawnWalker :: proc (pos: [2]int, pool: ^[MAX_WALKERS]Walker) {
+walkDrunk :: proc (center: [2]int, maxIters: int = 32, lifetimeRange: [2]int = {16, 24}) {
+    spawnWalker :: proc (pos: [2]int,
+                         pool: ^[MAX_WALKERS]Walker,
+                         randomDir: bool = true,
+                         dir: Direction = .Left,
+                         lifetimeRange: [2]int) {
         for &w in pool {
             if w.active do continue
 
-            w = {true, pos, rnd.choice_enum(Direction)}
+            w = {true,
+                 pos,
+                 randomDir ? rnd.choice_enum(Direction) : dir,
+                 int(la.lerp(f32(lifetimeRange.x),
+                             f32(lifetimeRange.y),
+                             rnd.float32()))}
             return
         }
     }
 
-    spawnWalker(c, &walkerPool)
+    walkerPool := [MAX_WALKERS]Walker{}
 
-    mapSize :: [2]int{len(gameMap[0]), len(gameMap)}
+    gameMap[center.y][center.x] = .Floor
 
-    kk := [2]int{-1, 1}
+    spawnWalker(center, &walkerPool, false, .Left, lifetimeRange)
+    spawnWalker(center, &walkerPool, false, .Right, lifetimeRange)
+    spawnWalker(center, &walkerPool, false, .Up, lifetimeRange)
+    spawnWalker(center, &walkerPool, false, .Down, lifetimeRange)
 
-    isFloor :: proc (t: Tile) -> bool {
-        return t == .FloorArena ||
-            t == .FloorBadLands ||
-            t == .FloorGreenZone ||
-            t == .FloorStoneHills;
+    DEATH_CHANCE: f32 : 0.01
+    REPRODUCTION_CHANCE: f32 : 0.05
+
+    TURN_RIGHT_CHANCE :: 20
+    TURN_LEFT_CHANCE  :: 30
+    TURN_DOWN_CHANCE  :: 15
+    TURN_UP_CHANCE    :: 35
+
+    #assert((TURN_RIGHT_CHANCE+TURN_LEFT_CHANCE+TURN_DOWN_CHANCE+TURN_UP_CHANCE) == 100)
+
+    dirChangeChances := [Direction]int{
+            .Right = TURN_RIGHT_CHANCE,
+            .Left = TURN_LEFT_CHANCE,
+            .Down = TURN_DOWN_CHANCE,
+            .Up = TURN_UP_CHANCE,
+    }
+    dirChangeLookup := [100]Direction{}
+    di := 0
+
+    for chance, dir in dirChangeChances {
+        for i in 0..<chance {
+            dirChangeLookup[di] = dir
+            di += 1
+        }
     }
 
-    setMapTileIfCan :: proc (x, y: int, t: Tile) {
-        if x < 0 || x >= (mapSize.x) do return
-        if y < 0 || y >= (mapSize.y) do return
+    for i in 0..<maxIters {
+        hasWalkerDied := false
+        hasWalkerSpawned := false
 
-        if isFloor(gameMap[y][x]) do return
-        gameMap[y][x] = t
-    }
-
-    step :: proc (w: ^Walker, floor, wall: Tile) {
-        setMapTileIfCan(w.pos.x, w.pos.y, floor)
-
-        for x in (w.pos.x-1)..=(w.pos.x+1) {
-            for y in (w.pos.y-1)..=(w.pos.y+1) {
-                setMapTileIfCan(x, y, wall)
-            }
-        }
-
-        switch w.direction {
-        case .Down:  w.pos.y += 1
-        case .Up:    w.pos.y -= 1
-        case .Right: w.pos.x += 1
-        case .Left:  w.pos.x -= 1
-        }
-
-        if w.pos.x == 0 || w.pos.x == (mapSize.x-1) || w.pos.y == 0 || w.pos.y == (mapSize.y-1) {
-            w.active = false
-        }
-
-        w.pos.x = clamp(w.pos.x, 0, mapSize.x)
-        w.pos.y = clamp(w.pos.y, 0, mapSize.y)
-    }
-
-    for i in 0..<maxIterations {
         for &w in walkerPool {
             if !w.active do continue
 
-            if rnd.float32() <= room2x2Chance {
-                x1 := rnd.choice(kk[:])
-                y1 := rnd.choice(kk[:])
-
-                for x in (w.pos.x)..=(w.pos.x+x1) {
-                    for y in (w.pos.y)..=(w.pos.y+y1) {
-                        setMapTileIfCan(x, y, floor)
-                    }
-                }
-
-                for x in (w.pos.x-1)..=(w.pos.x+x1+1) {
-                    for y in (w.pos.y-1)..=(w.pos.y+y1+1) {
-                        setMapTileIfCan(x, y, wall)
-                    }
-                }
-            } else if rnd.float32() <= room3x3Chance {
-                for x in (w.pos.x-1)..=(w.pos.x+1) {
-                    for y in (w.pos.y-1)..=(w.pos.y+1) {
-                        setMapTileIfCan(x, y, floor)
-                    }
-                }
-
-                for x in (w.pos.x-2)..=(w.pos.x+2) {
-                    for y in (w.pos.y-2)..=(w.pos.y+2) {
-                        setMapTileIfCan(x, y, wall)
-                    }
-                }
-            } else if rnd.float32() <= corridorChance {
-                for i in 0..<corridorLength {
-                    if !w.active do break
-                    step(&w, floor, wall)
-                }
+            switch w.direction {
+            case .Down:  w.pos.y += 1
+            case .Up:    w.pos.y -= 1
+            case .Right: w.pos.x += 1
+            case .Left:  w.pos.x -= 1
             }
 
-            if !w.active do break
-            step(&w, floor, wall)
+            curTile := &gameMap[w.pos.y][w.pos.x]
 
-            if rnd.float32() <= changeDirChance {
-                w.direction = rnd.choice_enum(Direction)
+            curTile^ = .Floor
 
-                if rnd.float32() <= spawnWalkerChance {
-                    spawnWalker(w.pos, &walkerPool)
-                }
+            if w.lifetime <= 0 || rnd.float32() < DEATH_CHANCE {
+                w.active = false
+                continue
+            } else if rnd.float32() < REPRODUCTION_CHANCE {
+                spawnWalker(w.pos, &walkerPool, lifetimeRange = lifetimeRange)
             }
+
+            w.direction = dirChangeLookup[rnd.int_max(100)]
+            w.lifetime -= 1
         }
-    }
-
-    for y in 0..<mapSize.y {
-        if isFloor(gameMap[y][0]) do gameMap[y][0] = wall
-        if isFloor(gameMap[y][mapSize.x-1]) do gameMap[y][mapSize.x-1] = wall
-    }
-
-    for x in 0..<mapSize.x {
-        if isFloor(gameMap[0][x]) do gameMap[0][x] = wall
-        if isFloor(gameMap[mapSize.y-1][x]) do gameMap[mapSize.y-1][x] = wall
     }
 }
 
 generateMap :: proc() {
-	  gameMap = {}
+    gameMap = {}
 
-    generateBiome(.FloorGreenZone, .WallGreenZone,
-                  {32, 224},
-                  room2x2Chance = .3, room3x3Chance = .03, corridorChance = .05,
-                  changeDirChance = .3,
-                  spawnWalkerChance = .2,
-                  corridorLength = 2)
+    FRAGMENTS: f64 : 32
+    RADIUS: f64 : 32
+    center := [2]int{MAP_SIZE/2, MAP_SIZE/2}
+
+    for a := 0.0; a <= m.PI*2; a += (m.PI*2)/FRAGMENTS {
+        offset := [2]int{int(m.round(m.cos(a)*RADIUS)),
+                         int(m.round(m.sin(a)*RADIUS))}
+        walkDrunk(offset+center)
+    }
+
+    INNER_RADIUS: f64 : 12
+    for a := 0.0; a < m.PI/2; a += m.PI/360.0 {
+        offset := [2]int{int(m.round(m.cos(a)*INNER_RADIUS+.5)),
+                         int(m.round(m.sin(a)*INNER_RADIUS+.5))}
+        for x in 0..=offset.x {
+            for y in 0..=offset.y {
+                gameMap[center.y+y][center.x+x] = .Floor
+                gameMap[center.y-y][center.x-x] = .Floor
+                gameMap[center.y-y][center.x+x] = .Floor
+                gameMap[center.y+y][center.x-x] = .Floor
+            }
+        }
+    }
+
+    for a := 0.0; a <= m.PI*2; a += (m.PI*2)/FRAGMENTS {
+        offset := [2]int{int(m.round(m.cos(a)*INNER_RADIUS)),
+                         int(m.round(m.sin(a)*INNER_RADIUS))}
+        walkDrunk(offset+center, 16, {8, 12})
+    }
+
+    gameMap[center.y][center.x] = .Floor
 }
 
 initGraphics :: proc() {
@@ -281,7 +243,7 @@ initGraphics :: proc() {
 
 init :: proc() {
 	  generateMap()
-	  player.pos = ({32, 224}+.5) * TILE_SIZE
+	  player.pos = ({MAP_SIZE, MAP_SIZE}*.5+.5)*TILE_SIZE
 
 	  initGraphics()
 }
@@ -297,7 +259,7 @@ setWindowSize :: proc(w, h: c.int) {
 	  r.SetWindowSize(w, h)
 }
 
-PLAYER_SPEED :: 2.5
+PLAYER_SPEED :: 1.5
 updatePlayer :: proc() {
 	  dir := r.Vector2{}
 
@@ -369,8 +331,8 @@ update :: proc() {
 			      drawMap()
 
 			      r.DrawRectanglePro(
-				        {player.pos.x, player.pos.y, TILE_SIZE.x, TILE_SIZE.y},
-				        TILE_SIZE * .5,
+				        {player.pos.x, player.pos.y, 16, 16},
+				        {8, 8},
 				        0,
 				        r.RED,
 			      )
