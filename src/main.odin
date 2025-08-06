@@ -1,5 +1,6 @@
 package mob
 
+import "core:sort"
 import m "core:math"
 import la "core:math/linalg"
 import rnd "core:math/rand"
@@ -64,7 +65,6 @@ Sprite :: enum {
     FloorGrass6,
     FloorGrass7,
     Wall,
-    BrightWall,
 }
 
 spriteYOffset := [Sprite]f32 {
@@ -85,7 +85,6 @@ spriteYOffset := [Sprite]f32 {
     .FloorGrass6     = 0,
     .FloorGrass7     = 0,
     .Wall            = -8,
-    .BrightWall      = -8,
 }
 
 spriteMap := [Sprite]SpriteRect {
@@ -106,7 +105,6 @@ spriteMap := [Sprite]SpriteRect {
     .FloorGrass6     = {32, 16 * 6, 16, 16},
     .FloorGrass7     = {32, 16 * 7, 16, 16},
     .Wall            = {64, 16 - 8, 16, 16 + 8},
-    .BrightWall      = {80, 16 - 8, 16, 16 + 8},
 }
 
 Tile :: Sprite
@@ -348,14 +346,6 @@ generateMap :: proc() {
         }
     }
 
-    for y in 0 ..< (len(gameMap) - 1) {
-        for x in 0 ..< (len(gameMap[y]) - 1) {
-            if gameMap[y][x] == .Wall && gameMap[y + 1][x] == .Wall {
-                gameMap[y][x] = .BrightWall
-            }
-        }
-    }
-
     player.pos = ({f32(center.x), f32(center.y) - f32(RADIUS)} + .5) * TILE_SIZE
 }
 
@@ -376,9 +366,9 @@ initGraphics :: proc() {
     }
 
     img := r.LoadImageFromMemory(".png", &spriteData[0], i32(len(spriteData)))
-    defer r.UnloadImage(img)
-
     spriteTex = r.LoadTextureFromImage(img)
+
+    defer r.UnloadImage(img)
 
     camera.zoom = 1.0
     camera.offset.x = f32(r.GetScreenWidth()) * .5
@@ -451,6 +441,24 @@ OriginPoint :: enum {
     Center,
 }
 
+drawWallStacked :: proc(pos: r.Vector2) {
+    t := camera.target
+    dir := la.normalize0(pos - t)
+
+    for i in 0 ..< 16 {
+        pd := pos + (dir * f32(i) * 1.015)
+
+        r.DrawTexturePro(
+            spriteTex,
+            {80, f32(i) * 16, 16, 16},
+            {pd.x, pd.y, 16, 16},
+            {},
+            0,
+            r.WHITE,
+        )
+    }
+}
+
 drawSprite :: proc(
     sprite: Sprite,
     pos: r.Vector2,
@@ -458,8 +466,6 @@ drawSprite :: proc(
     tint: r.Color = r.WHITE,
     originPoint: OriginPoint = .Center,
 ) {
-    if sprite == .Null do return
-
     rect := spriteMap[sprite]
     origin := r.Vector2{}
     switch originPoint {
@@ -484,22 +490,40 @@ MapDrawingOption :: enum {
     AfterPlayer,
 }
 
-drawMap :: proc(how: MapDrawingOption) {
-    startY, endY: int = 0, 0
-
-    playerY: int = int((player.pos.y + 8) / TILE_SIZE.y)
-
-    switch how {
-    case .BeforePlayer:
-        startY, endY = 0, playerY + 1
-    case .AfterPlayer:
-        startY, endY = playerY + 1, len(gameMap)
-    }
-
-    for yi in startY ..< endY {
+drawMap :: proc() {
+    for yi in 0..<len(gameMap) {
         for xi in 0 ..< len(gameMap[yi]) {
+            if (gameMap[yi][xi] == .Wall) do continue
             drawSprite(gameMap[yi][xi], {f32(xi), f32(yi)} * TILE_SIZE, originPoint = .TopLeft)
         }
+    }
+}
+
+drawWallMap :: proc() {
+    walls := make_dynamic_array([dynamic]r.Vector2, context.temp_allocator)
+    for yi in 0..<len(gameMap) {
+        for xi in 0..<len(gameMap[yi]) {
+            if gameMap[yi][xi] == .Wall {
+                append(&walls, r.Vector2{f32(xi), f32(yi)}*TILE_SIZE)
+            }
+        }
+    }
+
+    wallCompare :: proc (a, b: r.Vector2) -> int {
+        adist, bdist := la.length(a - player.pos), la.length(b - player.pos)
+
+        switch {
+        case adist < bdist: return  1
+        case bdist < adist: return -1
+        }
+
+        return 0
+    }
+
+    sort.quick_sort_proc(walls[:], wallCompare)
+
+    for w in walls {
+        drawWallStacked(w)
     }
 }
 
@@ -590,9 +614,9 @@ update :: proc() {
         r.ClearBackground(r.BLACK)
 
         r.BeginMode2D(camera);{
-            drawMap(.BeforePlayer)
+            drawMap()
+            drawWallMap()
             drawPlayer()
-            drawMap(.AfterPlayer)
 
             drawSprite(.Cursor, worldMouse + 1, cursorTilt * 10, r.BLACK)
             drawSprite(.Cursor, worldMouse, cursorTilt * 10)
@@ -606,4 +630,6 @@ update :: proc() {
             shouldRun = false
         }
     }
+
+    free_all(context.temp_allocator)
 }
