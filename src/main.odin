@@ -1,6 +1,5 @@
 package mob
 
-import "core:sort"
 import m "core:math"
 import la "core:math/linalg"
 import rnd "core:math/rand"
@@ -10,6 +9,7 @@ import "core:c"
 import "core:fmt"
 import "core:math/ease"
 import "core:math/noise"
+import "core:sort"
 
 GameStateMainMenu :: struct {}
 GameStatePlaying :: struct {}
@@ -64,7 +64,6 @@ Sprite :: enum {
     FloorGrass5,
     FloorGrass6,
     FloorGrass7,
-    Wall,
 }
 
 spriteYOffset := [Sprite]f32 {
@@ -84,7 +83,6 @@ spriteYOffset := [Sprite]f32 {
     .FloorGrass5     = 0,
     .FloorGrass6     = 0,
     .FloorGrass7     = 0,
-    .Wall            = -8,
 }
 
 spriteMap := [Sprite]SpriteRect {
@@ -104,7 +102,6 @@ spriteMap := [Sprite]SpriteRect {
     .FloorGrass5     = {32, 16 * 5, 16, 16},
     .FloorGrass6     = {32, 16 * 6, 16, 16},
     .FloorGrass7     = {32, 16 * 7, 16, 16},
-    .Wall            = {64, 16 - 8, 16, 16 + 8},
 }
 
 Tile :: Sprite
@@ -112,7 +109,8 @@ Tile :: Sprite
 TILE_SIZE :: r.Vector2{16, 16}
 MAP_SIZE :: 256
 
-gameMap := [MAP_SIZE][MAP_SIZE]Tile{}
+mapFloor := [MAP_SIZE][MAP_SIZE]Tile{}
+mapWalls := [MAP_SIZE][MAP_SIZE]bool{}
 
 spriteData := #load("../assets/spritemap.png")
 spriteTex: r.Texture2D
@@ -183,7 +181,7 @@ walkDrunk :: proc(center: [2]int, maxIters: int = 32, lifetimeRange: [2]int = {1
 
     walkerPool := [MAX_WALKERS]Walker{}
 
-    gameMap[center.y][center.x] = .GeneralFloor
+    mapFloor[center.y][center.x] = .GeneralFloor
 
     spawnWalker(center, &walkerPool, false, .Left, lifetimeRange)
     spawnWalker(center, &walkerPool, false, .Right, lifetimeRange)
@@ -234,7 +232,7 @@ walkDrunk :: proc(center: [2]int, maxIters: int = 32, lifetimeRange: [2]int = {1
                 w.pos.x -= 1
             }
 
-            curTile := &gameMap[w.pos.y][w.pos.x]
+            curTile := &mapFloor[w.pos.y][w.pos.x]
 
             curTile^ = .GeneralFloor
 
@@ -252,7 +250,8 @@ walkDrunk :: proc(center: [2]int, maxIters: int = 32, lifetimeRange: [2]int = {1
 }
 
 generateMap :: proc() {
-    gameMap = {}
+    mapFloor = {}
+    mapWalls = {}
 
     FRAGMENTS: f64 : 32
     RADIUS: f64 : 32
@@ -271,10 +270,10 @@ generateMap :: proc() {
         }
         for x in 0 ..= offset.x {
             for y in 0 ..= offset.y {
-                gameMap[center.y + y][center.x + x] = .GeneralFloor
-                gameMap[center.y - y][center.x - x] = .GeneralFloor
-                gameMap[center.y - y][center.x + x] = .GeneralFloor
-                gameMap[center.y + y][center.x - x] = .GeneralFloor
+                mapFloor[center.y + y][center.x + x] = .GeneralFloor
+                mapFloor[center.y - y][center.x - x] = .GeneralFloor
+                mapFloor[center.y - y][center.x + x] = .GeneralFloor
+                mapFloor[center.y + y][center.x - x] = .GeneralFloor
             }
         }
     }
@@ -307,25 +306,29 @@ generateMap :: proc() {
         .FloorSandstone4,
     }
 
-    ma, mi: f32 = 0, 0
 
-    for y in 0 ..< len(gameMap) {
-        for x in 0 ..< len(gameMap[y]) {
-            if gameMap[y][x] != .GeneralFloor do continue
-            p := [2]f64{f64(x), f64(y)}
+    generateFloorTile :: proc(x, y: int, seedTerrain, seedVariants: i64) -> Tile {
+        res := Tile.Null
+        p := [2]f64{f64(x), f64(y)}
 
-            v1 := noise.noise_2d(seedTerrain, p * .025)
-            v2 := noise.noise_2d(seedVariants, p)
+        v1 := noise.noise_2d(seedTerrain, p * .025)
+        v2 := noise.noise_2d(seedVariants, p)
 
-            ma = max(ma, v2)
-            mi = min(mi, v2)
-            if v1 < 0 {
-                gameMap[y][x] = .FloorGrass0
-                if v2 < -.65 do gameMap[y][x] = rnd.choice(grassVariants)
-            } else {
-                gameMap[y][x] = .FloorSandstone0
-                if v2 < -.65 do gameMap[y][x] = rnd.choice(sandstoneVarians)
-            }
+        if v1 < 0 {
+            res = .FloorGrass0
+            if v2 < -.65 do res = rnd.choice(grassVariants)
+        } else {
+            res = .FloorSandstone0
+            if v2 < -.65 do res = rnd.choice(sandstoneVarians)
+        }
+
+        return res
+    }
+
+    for y in 0 ..< len(mapFloor) {
+        for x in 0 ..< len(mapFloor[y]) {
+            if mapFloor[y][x] != .GeneralFloor do continue
+            mapFloor[y][x] = generateFloorTile(x, y, seedTerrain, seedVariants)
         }
     }
 
@@ -333,15 +336,24 @@ generateMap :: proc() {
         return int(s) >= int(Sprite.FloorSandstone0) && int(s) <= int(Sprite.FloorGrass7)
     }
 
-    for y in 1 ..< (len(gameMap) - 1) {
-        for x in 1 ..< (len(gameMap[y]) - 1) {
-            if !isFloor(gameMap[y][x]) do continue
+    for y in 1 ..< (len(mapFloor) - 1) {
+        for x in 1 ..< (len(mapFloor[y]) - 1) {
+            if !isFloor(mapFloor[y][x]) do continue
 
             for xi in -1 ..= 1 {
                 for yi in -1 ..= 1 {
-                    if isFloor(gameMap[y + yi][x + xi]) do continue
-                    gameMap[y + yi][x + xi] = .Wall
+                    xx, yy := x + xi, y + yi
+                    if isFloor(mapFloor[yy][xx]) do continue
+                    mapWalls[yy][xx] = true
                 }
+            }
+        }
+    }
+
+    for y in 0 ..< len(mapWalls) {
+        for x in 0 ..< len(mapWalls[y]) {
+            if mapWalls[y][x] {
+                mapFloor[y][x] = generateFloorTile(x, y, seedTerrain, seedVariants)
             }
         }
     }
@@ -491,30 +503,31 @@ MapDrawingOption :: enum {
 }
 
 drawMap :: proc() {
-    for yi in 0..<len(gameMap) {
-        for xi in 0 ..< len(gameMap[yi]) {
-            if (gameMap[yi][xi] == .Wall) do continue
-            drawSprite(gameMap[yi][xi], {f32(xi), f32(yi)} * TILE_SIZE, originPoint = .TopLeft)
+    for yi in 0 ..< len(mapFloor) {
+        for xi in 0 ..< len(mapFloor[yi]) {
+            drawSprite(mapFloor[yi][xi], {f32(xi), f32(yi)} * TILE_SIZE, originPoint = .TopLeft)
         }
     }
 }
 
 drawWallMap :: proc() {
     walls := make_dynamic_array([dynamic]r.Vector2, context.temp_allocator)
-    for yi in 0..<len(gameMap) {
-        for xi in 0..<len(gameMap[yi]) {
-            if gameMap[yi][xi] == .Wall {
-                append(&walls, r.Vector2{f32(xi), f32(yi)}*TILE_SIZE)
+    for yi in 0 ..< len(mapWalls) {
+        for xi in 0 ..< len(mapWalls[yi]) {
+            if mapWalls[yi][xi] {
+                append(&walls, r.Vector2{f32(xi), f32(yi)} * TILE_SIZE)
             }
         }
     }
 
-    wallCompare :: proc (a, b: r.Vector2) -> int {
+    wallCompare :: proc(a, b: r.Vector2) -> int {
         adist, bdist := la.length(a - player.pos), la.length(b - player.pos)
 
         switch {
-        case adist < bdist: return  1
-        case bdist < adist: return -1
+        case adist < bdist:
+            return 1
+        case bdist < adist:
+            return -1
         }
 
         return 0
