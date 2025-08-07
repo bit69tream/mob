@@ -27,11 +27,13 @@ SpriteRect :: r.Rectangle
 PLAYER_SPRITE_WIDTH :: 10
 PLAYER_SPRITE_HEIGHT :: 16
 
-PLAYER_MAX_SPEED :: 1.7
-PLAYER_IDLE_TIME :: 1
+playerColliderSize :: [2]f32{PLAYER_SPRITE_WIDTH - 2, PLAYER_SPRITE_HEIGHT - 6}
+
+PLAYER_MAX_SPEED :: 60 * 1.7 // pixels per second
+PLAYER_IDLE_TIME :: 1 // seconds
 
 PLAYER_RUNNING_ANIM_TIMER: f32 : .06
-PLAYER_IDLE_ANIM_TIMER: f32 : .01
+PLAYER_IDLE_ANIM_TIMER: f32 : 0
 
 Player :: struct {
     pos:             r.Vector2,
@@ -306,7 +308,6 @@ generateMap :: proc() {
         .FloorSandstone4,
     }
 
-
     generateFloorTile :: proc(x, y: int, seedTerrain, seedVariants: i64) -> Tile {
         res := Tile.Null
         p := [2]f64{f64(x), f64(y)}
@@ -421,8 +422,9 @@ updatePlayer :: proc() {
             player.animFrame = 0
             player.playerAnimTimer = PLAYER_RUNNING_ANIM_TIMER
         }
+        player.runTime += r.GetFrameTime()
 
-        player.speed = clamp(0, PLAYER_MAX_SPEED, player.speed + r.GetFrameTime() * 25)
+        player.speed = ease.quartic_out(clamp(player.runTime * 2, 0, 1)) * PLAYER_MAX_SPEED
     } else {
         player.speed = 0
         player.runTime = 0
@@ -435,8 +437,10 @@ updatePlayer :: proc() {
         player.idleTime += r.GetFrameTime()
     }
 
-    player.posDelta = dir * player.speed
-    player.pos += player.posDelta
+    player.posDelta = dir * player.speed * r.GetFrameTime()
+    // player.pos += player.posDelta
+
+    playerCollideWithWalls()
 }
 
 getScreenSize :: proc() -> r.Vector2 {
@@ -610,6 +614,56 @@ drawPlayer :: proc() {
         player.playerAnimTimer = timer
     } else {
         player.playerAnimTimer -= r.GetFrameTime()
+    }
+}
+
+playerCollideWithWalls :: proc() {
+    getPlayerCollider :: proc() -> r.Rectangle {
+        return {
+            player.pos.x - playerColliderSize.x * .5,
+            player.pos.y - playerColliderSize.y * .5,
+            playerColliderSize.x,
+            playerColliderSize.y,
+        }
+    }
+    getPlayerMapCoord :: proc() -> [2]i32 {
+        return [2]i32{i32(player.pos.x / TILE_SIZE.x), i32(player.pos.y / TILE_SIZE.y)}
+    }
+    getTileRec :: proc(x, y: i32) -> r.Rectangle {
+        return {f32(x) * TILE_SIZE.x, f32(y) * TILE_SIZE.y, TILE_SIZE.x, TILE_SIZE.y}
+    }
+
+    playerCoord := getPlayerMapCoord()
+
+    player.pos.x += player.posDelta.x
+
+    for xi in -1 ..= 1 {
+        for yi in -1 ..= 1 {
+            p := playerCoord + {i32(xi), i32(yi)}
+            if !mapWalls[p.y][p.x] do continue
+            playerColliderRec := getPlayerCollider()
+
+            tileRec := getTileRec(p.x, p.y)
+            collisionRec := r.GetCollisionRec(playerColliderRec, tileRec)
+            if collisionRec == {} do continue
+
+            player.pos.x += m.sign(playerColliderRec.x - tileRec.x) * collisionRec.width
+        }
+    }
+
+    player.pos.y += player.posDelta.y
+
+    for xi in -1 ..= 1 {
+        for yi in -1 ..= 1 {
+            p := playerCoord + {i32(xi), i32(yi)}
+            if !mapWalls[p.y][p.x] do continue
+            playerColliderRec := getPlayerCollider()
+
+            tileRec := getTileRec(p.x, p.y)
+            collisionRec := r.GetCollisionRec(playerColliderRec, tileRec)
+            if collisionRec == {} do continue
+            player.pos.y += m.sign(playerColliderRec.y - tileRec.y) * collisionRec.height
+        }
     }
 }
 
