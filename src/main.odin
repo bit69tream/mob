@@ -564,12 +564,10 @@ playerRunningSprites := [PLAYER_MAX_ANIM_SPRITES]r.Rectangle {
     {50, 223, 10, 17},
 }
 
-wrapNumb :: proc(n, limit: int) -> int {
-    if n < 0 {
-        return (limit) - abs(n)
-    } else {
-        return n % limit
-    }
+@(require_results)
+wrap :: proc "contextless" (x, y: int) -> int {
+	tmp := x % y
+	return y + tmp if tmp < 0 else tmp
 }
 
 drawPlayer :: proc() {
@@ -590,10 +588,10 @@ drawPlayer :: proc() {
         timer = PLAYER_RUNNING_ANIM_TIMER
     }
 
-    m := f32(1.0)
-    if worldMouse.x < player.pos.x do m = -1.0
+    mm := f32(1.0)
+    if worldMouse.x < player.pos.x do mm = -1.0
 
-    pSprite.width *= m
+    pSprite.width *= mm
     r.DrawTexturePro(
         spriteTex,
         pSprite,
@@ -605,12 +603,12 @@ drawPlayer :: proc() {
 
     frameD := int(1)
     p := (player.posDelta.x / abs(player.posDelta.x))
-    if p != m {
+    if p != mm {
         frameD = -1
     }
 
     if player.playerAnimTimer <= 0 {
-        player.animFrame = wrapNumb(player.animFrame + frameD, PLAYER_MAX_ANIM_SPRITES)
+        player.animFrame = wrap(player.animFrame + frameD, PLAYER_MAX_ANIM_SPRITES)
         player.playerAnimTimer = timer
     } else {
         player.playerAnimTimer -= r.GetFrameTime()
