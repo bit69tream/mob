@@ -1,5 +1,4 @@
 # MOB
-карта представляет собой что-то типа ленты мобиуса, но по-другому
-один цикл состоит из 3х зон, которые повторяются каждый цикл, но с небольшими изменениями и увеличенной сложностью
-типа как в балатре
-оружие меняется за счёт апгрейдов, которые можно свободно менять местами, подбирать и выбрасывать в мир
+Just a playground for now. But the idea is basically: you have an spiraling map
+where each layer looks similar to the previous one, but not quite. There may
+also be occasional bosses.
